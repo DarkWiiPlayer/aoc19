@@ -1,8 +1,37 @@
 -- vim: set filetype=terra :miv --
 
+local intcode = {}
+
 local stdio = terralib.includec 'stdio.h'
 
-function compile(program)
+local terra run(memory : &int, memsize: int)
+    var pc = 0 -- Program Counter (instruction pointer)
+
+    while 0 <= pc and pc < memsize do
+      var instruction = memory[pc]
+      if instruction == 0x01 then
+        memory[memory[pc+3]] = memory[memory[pc+1]] + memory[memory[pc+2]]
+        pc = pc + 4
+      elseif instruction == 0x02 then
+        memory[memory[pc+3]] = memory[memory[pc+1]] * memory[memory[pc+2]]
+        pc = pc + 4
+      else
+        break
+      end
+    end
+end
+
+local terra dump(memory : &int, memsize : int)
+  for i=0,memsize do
+    if i%5==4 or i==memsize-1 then
+      stdio.fprintf(stdio.stderr, '0x%08x\n', memory[memsize])
+    else
+      stdio.fprintf(stdio.stderr, '0x%08x\t', memory[i])
+    end
+  end
+end
+
+local function parse(program)
   -- Separate integers into a sequence
   local code = {}
   for instruction in program:gmatch('%d+') do
@@ -14,38 +43,26 @@ function compile(program)
       emit(instruction)
     end
   end))
-  local memsize = #code
-  -- Return a terra function
+  return memory, #code
+end
+
+function intcode.compile(program)
+  local memory, memsize = parse(program)
   return terra()
-    var pc = 0 -- Program Counter (instruction pointer)
-
-    while 0 <= pc and pc < memsize do
-      var instruction = memory[pc]
-      if instruction == 1 then
-        memory[memory[pc+3]] = memory[memory[pc+1]] + memory[memory[pc+2]]
-        pc = pc + 4
-      elseif instruction == 2 then
-        memory[memory[pc+3]] = memory[memory[pc+1]] * memory[memory[pc+2]]
-        pc = pc + 4
-      else
-        break
-      end
-    end
-
-    -- Output the program memory
-    for i=0, memsize-1 do
-      stdio.printf("%i,", memory[i])
-    end
-    stdio.printf("%i\n", memory[memsize])
+    run(memory, memsize)
+    dump(memory, memsize)
   end
 end
 
-for i, arg in ipairs{...} do
-  local file = io.open(arg)
-  local code = file:read('*a')
-
-  local main = compile(code)
-  terralib.saveobj(arg..".elf", { main = main })
-
-  file:close()
+function intcode.run(program)
+  local memory, memsize = parse(program)
+  (terra() run(memory, memsize) end)()
+  local buffer = {}
+  memory = memory:getpointer()[0]
+  for i=1,memsize do
+    buffer[i] = memory[i-1]
+  end
+  return table.concat(buffer, ',')
 end
+
+return intcode
